@@ -10,4 +10,10 @@
 
 @implementation CSUserModel
 
++ (BOOL)isLogin {
+    
+    return NO;
+    
+}
+
 @end
