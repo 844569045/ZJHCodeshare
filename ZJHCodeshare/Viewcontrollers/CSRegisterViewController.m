@@ -13,9 +13,16 @@
 #import <Masonry.h>
 #import <ReactiveCocoa.h>
 #import <SMSSDK/SMS_SDK/SMSSDK.h>
-
+#import "NSTimer+Blocks.h"
+#import "NSTimer+Addition.h"
+#import "NSString+MD5.h"
+#import "UIAlertView+Block.h"
 
 @interface CSRegisterViewController ()
+
+//写成属性，可以方便的监控变化
+@property (nonatomic,strong)NSNumber * waitTime;
+@property (nonatomic,strong)NSTimer * timer;
 
 @end
 
@@ -160,8 +167,12 @@
     [rightButton layer].borderWidth = 1.0f;
     [rightButton layer].cornerRadius = 4.f;
     [rightButton layer].masksToBounds = YES;
+    [rightButton setBorderColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [rightButton setBorderColor:[UIColor grayColor] forState:UIControlStateHighlighted];
+    [rightButton setBackgroundColor:[UIColor lightGrayColor] forState:UIControlStateDisabled];
     UIView * rightView = [[UIView alloc]initWithFrame:CGRectMake(0, 0, 108, 48)];
     [rightView addSubview:rightButton];
+
     [rightButton mas_makeConstraints:^(MASConstraintMaker *make) {
         
         make.center.equalTo(@0);
@@ -176,7 +187,18 @@
     phonetext.keyboardType = UIKeyboardTypeNumberPad;
     
     
-    UIButton * registerButton = [[UIButton alloc]init];
+    //注册按钮
+    UIButton * registerButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    [registerButton setTitle:@"注册" forState:UIControlStateNormal];
+    [registerButton titleLabel].font = [UIFont systemFontOfSize:15];
+    [registerButton setFrame:CGRectMake(0, 400, self.view.frame.size.width, 48)];
+    [self.view addSubview:registerButton];
+    [registerButton setBackgroundColor:[UIColor colorWithRed:0.47 green:0.956 blue:0.629 alpha:1.000] forState:UIControlStateNormal];
+    [registerButton setBackgroundColor:[UIColor grayColor] forState:UIControlStateDisabled];
+    [registerButton setBackgroundColor:[UIColor lightGrayColor] forState:UIControlStateHighlighted];
+    
+    
+    
     
     
     //ReactiveCocoa 处理
@@ -199,13 +221,17 @@
         }
     }];
     
+    //我们给等待时间赋初值为－1
+    self.waitTime = @-1;
+    
+    
     //获取验证码按钮默认应该是不可点的
     rightButton.enabled = NO;
     //我们可以直接将某个信号处理的返回结果，设置为某个对象的属性值。
 //    RAC(rightButton,enabled) = [RACSignal combineLatest:@[] reduce:];
-    RAC(rightButton, enabled) = [RACSignal combineLatest:@[phonetext.rac_textSignal] reduce:^(NSString * phone){
+    RAC(rightButton, enabled) = [RACSignal combineLatest:@[phonetext.rac_textSignal,RACObserve(self, waitTime)] reduce:^(NSString * phone,NSNumber * waitTime){
        
-        return @(phone.length >= 11);
+        return @(phone.length >= 11 && waitTime.integerValue < 0);
     }];
     
     
@@ -216,20 +242,81 @@
     }];
     
     
-    
+    //如果在实际开发中 我们在座发送验证 都会有一个等待时间
+    //1.为了节省成本一般开发中用第三方短信提供方发送验证码功能，一条大概6到8分钱所以成本还是很高的
+    //2.为了用户体验
     [rightButton handleControlEvents:UIControlEventTouchUpInside withBlock:^(id weakSender) {
+        
+        //直接进入读秒
+        self.waitTime = @60;
         
         //发送验证码
     [SMSSDK getVerificationCodeByMethod:SMSGetCodeMethodSMS phoneNumber:phonetext.text zone:@"86" customIdentifier:nil result:^(NSError *error) {
        
         if (error) {
-            
+            //如果失败 让等待时间变为－1
+            self.waitTime = @-1;
         }else {
             NSLog(@"获取验证码成功");
-            
+            NSTimer * timer = [NSTimer scheduledTimerWithTimeInterval:1.0f block:^{
+                if (self.waitTime.integerValue == -1) {
+                    [timer invalidate];
+                    
+                }else {
+                    //让时间健一
+                    self.waitTime = [NSNumber numberWithInteger:self.waitTime.integerValue -1];
+                }
+            } repeats:YES];
         }
     }];
     }];
+    
+    //让RAC监控数据的变化，显示相应的界面
+    [RACObserve(self, waitTime) subscribeNext:^(NSNumber * waitTime) {
+        
+        if (waitTime.integerValue <= 0) {
+            [self.timer invalidate];
+            self.timer = nil;
+            [rightButton setTitle:@"获取验证码"forState:UIControlStateNormal];
+        }else if (waitTime.integerValue > 0){
+            
+            [rightButton setTitle:[NSString stringWithFormat:@"等待%@秒",waitTime] forState:UIControlStateNormal];
+        }
+    }];
+    
+    [[registerButton rac_signalForControlEvents:UIControlEventTouchUpInside] subscribeNext:^(id x) {
+        
+        //一般我们的密码不可能会明文传输，最简单的也要进行MD5加密
+        //一旦进行MD5加密，会破坏字符串原来携带的信息。
+        //但是对于密码来说服务器，服务器和app交互并不需要知道密码所携带的信息，所以无论是登录还是注册，我们都必须加密（服务器也不知道你的密码是多少）
+        //MD5加密是死的，所以别人可以通过暴力破解的方式获取你的密码
+        //所以我们有时候，会将我们的密码加盐后再进行加密，传给服务器
+        
+        //固定字符串的盐 @"ABCDEF"
+        //随即字符串的盐 @""
+        
+        NSString * pass = [passwordtext.text md532BitUpper];
+        NSDictionary * paras = @{
+                                 @"service":@"User.Register",
+                                 @"phone":phonetext.text,
+                                 @"password":pass,
+                                 @"verificationCode":yanzheng.text,
+                                 };
+        [NetworkTool getDataWithParameters:paras completeBlock:^(BOOL success, id result) {
+            if (success) {
+                
+                [self.navigationController popViewControllerAnimated:YES];
+            }else {
+                [UIAlertView alertWithCallBackBlock:nil title:@"温馨提示" message:result cancelButtonName:@"确定" otherButtonTitles:nil, nil];
+            }
+        }];
+    }];
+    
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    
+    [self.view endEditing:YES];
     
 }
 
@@ -246,20 +333,23 @@
 //3.可以在代理方法里面处理
 //4.也可以在代理方法里处理
 
+/*
+ 需求2：
+ 1.点击发送验证码 按钮变为不可用，发送验证成功
+ 2.如果发送成功，按钮不可用，按钮上面显示60秒倒计时
+ 3.如果失败，将按钮设置为可用，提示发送失败
+ 4.当倒计时结束的时候将，按钮设置为可（还要同时考虑到手机号码是否符合规则）
+ 
+ 我们可以设置一个初始数字为60的变量，发送验证码的按钮可用与否 在添加一个条件，当0－60的时候，按钮不可用，我们的定时器每走一次，将这个数字减去1，同时监控这个数组的变化
+ */
+
 
 - (void)didReceiveMemoryWarning {
     [super didReceiveMemoryWarning];
     // Dispose of any resources that can be recreated.
 }
 
-/*
-#pragma mark - Navigation
 
-// In a storyboard-based application, you will often want to do a little preparation before navigation
-- (void)prepareForSegue:(UIStoryboardSegue *)segue sender:(id)sender {
-    // Get the new view controller using [segue destinationViewController].
-    // Pass the selected object to the new view controller.
-}
-*/
+
 
 @end

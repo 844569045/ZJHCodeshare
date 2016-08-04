@@ -15,6 +15,7 @@
 #import "Masonry.h"
 #import "QFCodeShareInit.h"
 #import "QFCommonSetting.h"
+#import "NetworkTool.h"
 
 
 #endif /* PrefixHeader_pch */
